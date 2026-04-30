@@ -1,6 +1,6 @@
 # bot.py
-# FULLY WORKING SIMPLE ADVANCED TALLY BOT
-# pip install python-telegram-bot==21.6
+# Premium Stable Tally Telegram Bot
+# python-telegram-bot==21.6
 
 import sqlite3
 from datetime import datetime
@@ -21,7 +21,9 @@ from telegram.ext import (
 
 TOKEN = "8779700912:AAGJqIRuoLlxXGqSZVFum9PE9fSm4_nbYjk"
 
-# ---------------- DATABASE ----------------
+# ==================================================
+# DATABASE
+# ==================================================
 conn = sqlite3.connect("tally.db", check_same_thread=False)
 cur = conn.cursor()
 
@@ -57,9 +59,22 @@ date TEXT
 )
 """)
 
+cur.execute("""
+CREATE TABLE IF NOT EXISTS ledger(
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+party TEXT,
+type TEXT,
+amount INTEGER,
+date TEXT,
+note TEXT
+)
+""")
+
 conn.commit()
 
-# ---------------- CONFIG ----------------
+# ==================================================
+# CONFIG
+# ==================================================
 COSTS = {
     "KT": 12000,
     "LT": 17000,
@@ -68,24 +83,44 @@ COSTS = {
 
 BRANDS = ["BOM", "RBL", "CBI", "BB"]
 
-# ---------------- MENU ----------------
+# ==================================================
+# MENU
+# ==================================================
 def menu():
     keyboard = [
         ["📦 Add Kit", "💰 Sell to KK"],
-        ["📥 KK Payment", "📋 Unsold Stock"],
-        ["👤 Providers", "🧾 KK Pending"],
-        ["📊 Reports", "💸 Pay Provider"],
+        ["📥 KK Payment", "💸 Pay Provider"],
+        ["📋 Stock", "🧾 KK Pending"],
+        ["👤 Providers", "📊 Reports"],
+        ["📜 Ledger"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# ---------------- START ----------------
+# ==================================================
+# HELPERS
+# ==================================================
+def today():
+    return datetime.now().strftime("%d/%m/%Y")
+
+def add_ledger(party, typ, amount, note):
+    cur.execute("""
+    INSERT INTO ledger(party,type,amount,date,note)
+    VALUES(?,?,?,?,?)
+    """, (party, typ, amount, today(), note))
+    conn.commit()
+
+# ==================================================
+# START
+# ==================================================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🔥 Tally Bot Ready",
+        "🔥 Premium Tally Bot Ready",
         reply_markup=menu()
     )
 
-# ---------------- ADD KIT ----------------
+# ==================================================
+# ADD KIT
+# ==================================================
 async def add_kit(update, context):
     buttons = [
         [InlineKeyboardButton("KT", callback_data="provider_KT")],
@@ -94,11 +129,13 @@ async def add_kit(update, context):
     ]
 
     await update.message.reply_text(
-        "Select Provider:",
+        "📦 Select Provider:",
         reply_markup=InlineKeyboardMarkup(buttons)
     )
 
-# ---------------- CALLBACK ----------------
+# ==================================================
+# CALLBACKS
+# ==================================================
 async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -117,7 +154,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
         await query.message.reply_text(
-            "Select Brand:",
+            "🏷 Select Brand:",
             reply_markup=InlineKeyboardMarkup(buttons)
         )
         return
@@ -128,20 +165,22 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["brand"] = brand
         context.user_data["mode"] = "holder"
 
-        await query.message.reply_text("Enter Holder Name:")
+        await query.message.reply_text(
+            "👤 Enter Holder Name:"
+        )
         return
 
-    # Sell Kit Select
+    # Sell Select
     if data.startswith("sell_"):
         kit_id = int(data.replace("sell_", ""))
         context.user_data["sell_kit"] = kit_id
 
         buttons = [
-            [InlineKeyboardButton("₹25000", callback_data="price_25000")]
+            [InlineKeyboardButton("₹25,000", callback_data="price_25000")]
         ]
 
         await query.message.reply_text(
-            "Sell Price:",
+            "💰 Sell Price:",
             reply_markup=InlineKeyboardMarkup(buttons)
         )
         return
@@ -153,17 +192,17 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         buttons = [
             [InlineKeyboardButton("₹0", callback_data="recv_0")],
-            [InlineKeyboardButton("₹5000", callback_data="recv_5000")],
+            [InlineKeyboardButton("₹5,000", callback_data="recv_5000")],
             [InlineKeyboardButton("Full", callback_data=f"recv_{price}")]
         ]
 
         await query.message.reply_text(
-            "Received Now?",
+            "💵 Received Now?",
             reply_markup=InlineKeyboardMarkup(buttons)
         )
         return
 
-    # Receive Payment During Sale
+    # Received Select
     if data.startswith("recv_"):
         recv = int(data.replace("recv_", ""))
 
@@ -171,12 +210,11 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         price = context.user_data["sell_price"]
 
         pending = price - recv
-        date = datetime.now().strftime("%d/%m/%Y")
 
         cur.execute("""
         INSERT INTO sales(kit_id,sell_price,received,pending,date)
         VALUES(?,?,?,?,?)
-        """, (kit_id, price, recv, pending, date))
+        """, (kit_id, price, recv, pending, today()))
 
         cur.execute("""
         UPDATE kits SET status='SOLD' WHERE id=?
@@ -184,41 +222,56 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         conn.commit()
 
+        if recv > 0:
+            add_ledger("KK", "RECEIVED", recv, "Sale Payment")
+
         await query.message.reply_text(
-            f"✅ Sold to KK\nSell ₹{price}\nReceived ₹{recv}\nPending ₹{pending}",
+            f"✅ Sold to KK\n\n"
+            f"Sell ₹{price}\n"
+            f"Received ₹{recv}\n"
+            f"Pending ₹{pending}",
             reply_markup=menu()
         )
         return
 
-# ---------------- TEXT HANDLER ----------------
+# ==================================================
+# TEXT HANDLER
+# ==================================================
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text.strip()
 
-    # -------- HOLDER SAVE --------
+    # --------------------------------------
+    # HOLDER ENTRY
+    # --------------------------------------
     if context.user_data.get("mode") == "holder":
         provider = context.user_data["provider"]
         brand = context.user_data["brand"]
         holder = txt.upper()
 
         cost = COSTS[provider]
-        date = datetime.now().strftime("%d/%m/%Y")
 
         cur.execute("""
         INSERT INTO kits(provider,brand,holder,cost,status,date)
         VALUES(?,?,?,?,?,?)
-        """, (provider, brand, holder, cost, "STOCK", date))
+        """, (provider, brand, holder, cost, "STOCK", today()))
 
         conn.commit()
 
         context.user_data["mode"] = ""
 
         await update.message.reply_text(
-            f"✅ Kit Added\n{provider} | {brand} | {holder} | ₹{cost}",
+            f"✅ Kit Added\n\n"
+            f"Provider: {provider}\n"
+            f"Brand: {brand}\n"
+            f"Holder: {holder}\n"
+            f"Cost: ₹{cost}",
             reply_markup=menu()
         )
         return
 
-    # -------- KK PAYMENT PROCESS --------
+    # --------------------------------------
+    # KK PAYMENT PROCESS
+    # --------------------------------------
     if context.user_data.get("mode") == "kkpay":
         try:
             sale_id, amount = txt.split()
@@ -231,7 +284,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             row = cur.fetchone()
 
             if not row:
-                await update.message.reply_text("Wrong ID")
+                await update.message.reply_text("❌ Wrong ID")
                 return
 
             new_received = row[0] + amount
@@ -247,6 +300,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             """, (new_received, new_pending, sale_id))
 
             conn.commit()
+
+            add_ledger("KK", "RECEIVED", amount, f"Payment Sale ID {sale_id}")
+
             context.user_data["mode"] = ""
 
             await update.message.reply_text(
@@ -254,37 +310,44 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=menu()
             )
             return
+
         except:
-            await update.message.reply_text("Use: ID Amount")
+            await update.message.reply_text("Use:\nID Amount")
             return
 
-    # -------- PROVIDER PAYMENT PROCESS --------
+    # --------------------------------------
+    # PROVIDER PAYMENT PROCESS
+    # --------------------------------------
     if context.user_data.get("mode") == "providerpay":
         try:
             provider, amount = txt.split()
             provider = provider.upper()
             amount = int(amount)
 
-            date = datetime.now().strftime("%d/%m/%Y")
-
             cur.execute("""
             INSERT INTO provider_payments(provider,amount,date)
             VALUES(?,?,?)
-            """, (provider, amount, date))
+            """, (provider, amount, today()))
 
             conn.commit()
+
+            add_ledger(provider, "PAID", amount, "Provider Payment")
+
             context.user_data["mode"] = ""
 
             await update.message.reply_text(
-                "✅ Provider Payment Saved",
+                f"✅ {provider} Payment Saved",
                 reply_markup=menu()
             )
             return
+
         except:
-            await update.message.reply_text("Use: KT 5000")
+            await update.message.reply_text("Use:\nKT 5000")
             return
 
-    # -------- BUTTONS --------
+    # ==================================================
+    # BUTTONS
+    # ==================================================
 
     if txt == "📦 Add Kit":
         await add_kit(update, context)
@@ -296,11 +359,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         FROM kits
         WHERE status='STOCK'
         """)
-
         rows = cur.fetchall()
 
         if not rows:
-            await update.message.reply_text("No Stock")
+            await update.message.reply_text("📭 No Stock")
             return
 
         buttons = []
@@ -308,33 +370,32 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for r in rows:
             buttons.append([
                 InlineKeyboardButton(
-                    f"{r[0]} {r[1]} {r[2]} {r[3]}",
+                    f"{r[0]} | {r[1]} | {r[2]} | {r[3]}",
                     callback_data=f"sell_{r[0]}"
                 )
             ])
 
         await update.message.reply_text(
-            "Select Kit:",
+            "📦 Select Kit:",
             reply_markup=InlineKeyboardMarkup(buttons)
         )
         return
 
     if txt == "📥 KK Payment":
         cur.execute("""
-        SELECT id,pending FROM sales
+        SELECT id,pending,date FROM sales
         WHERE pending>0
         """)
-
         rows = cur.fetchall()
 
         if not rows:
-            await update.message.reply_text("No KK Pending")
+            await update.message.reply_text("✅ No KK Pending")
             return
 
-        msg = "Send:\nID Amount\n\n"
+        msg = "💵 Send:\nID Amount\n\n"
 
         for r in rows:
-            msg += f"ID {r[0]} | ₹{r[1]}\n"
+            msg += f"ID {r[0]} | ₹{r[1]} | {r[2]}\n"
 
         context.user_data["mode"] = "kkpay"
 
@@ -345,21 +406,20 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = "providerpay"
 
         await update.message.reply_text(
-            "Send:\nKT 5000\nLT 7000"
+            "💸 Send:\nKT 5000\nLT 7000"
         )
         return
 
-    if txt == "📋 Unsold Stock":
+    if txt == "📋 Stock":
         cur.execute("""
         SELECT id,provider,brand,holder
         FROM kits
         WHERE status='STOCK'
         """)
-
         rows = cur.fetchall()
 
         if not rows:
-            await update.message.reply_text("No Stock")
+            await update.message.reply_text("📭 No Stock")
             return
 
         msg = "📋 Unsold Stock\n\n"
@@ -376,11 +436,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         FROM sales
         WHERE pending>0
         """)
-
         rows = cur.fetchall()
 
         if not rows:
-            await update.message.reply_text("No Pending")
+            await update.message.reply_text("✅ No Pending")
             return
 
         msg = "🧾 KK Pending\n\n"
@@ -394,12 +453,15 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if txt == "👤 Providers":
         for p in ["KT", "LT", "AK"]:
             cur.execute("""
-            SELECT SUM(cost) FROM kits WHERE provider=?
+            SELECT SUM(cost)
+            FROM kits
+            WHERE provider=?
             """, (p,))
             payable = cur.fetchone()[0] or 0
 
             cur.execute("""
-            SELECT SUM(amount) FROM provider_payments
+            SELECT SUM(amount)
+            FROM provider_payments
             WHERE provider=?
             """, (p,))
             paid = cur.fetchone()[0] or 0
@@ -407,7 +469,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pending = payable - paid
 
             await update.message.reply_text(
-                f"{p}\nPayable ₹{payable}\nPaid ₹{paid}\nPending ₹{pending}"
+                f"👤 {p}\n"
+                f"Payable ₹{payable}\n"
+                f"Paid ₹{paid}\n"
+                f"Pending ₹{pending}"
             )
         return
 
@@ -422,14 +487,48 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """)
         cost_total = cur.fetchone()[0] or 0
 
+        cur.execute("""
+        SELECT SUM(received)
+        FROM sales
+        """)
+        received_total = cur.fetchone()[0] or 0
+
         profit = sales_total - cost_total
 
         await update.message.reply_text(
-            f"📊 Reports\n\nSales ₹{sales_total}\nCost ₹{cost_total}\nProfit ₹{profit}"
+            f"📊 Reports\n\n"
+            f"Sales ₹{sales_total}\n"
+            f"Received ₹{received_total}\n"
+            f"Cost ₹{cost_total}\n"
+            f"Profit ₹{profit}"
         )
         return
 
-# ---------------- APP ----------------
+    if txt == "📜 Ledger":
+        cur.execute("""
+        SELECT party,type,amount,date,note
+        FROM ledger
+        ORDER BY id DESC
+        LIMIT 30
+        """)
+        rows = cur.fetchall()
+
+        if not rows:
+            await update.message.reply_text("📭 No Ledger Data")
+            return
+
+        msg = "📜 Latest Ledger\n\n"
+
+        for r in rows:
+            icon = "⬅️" if r[1] == "RECEIVED" else "➡️"
+            msg += f"{r[3]} {icon} {r[0]} ₹{r[2]}\n"
+
+        await update.message.reply_text(msg)
+        return
+
+# ==================================================
+# APP
+# ==================================================
 app = ApplicationBuilder().token(TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
