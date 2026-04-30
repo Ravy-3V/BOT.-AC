@@ -1,7 +1,6 @@
-# FIX ISSUE: Holder Name ke baad freeze ho raha tha
-# Reason:
-# CallbackQuery se brand select ke baad Conversation start nahi ho rahi thi.
-# Isliye full fixed bot.py below.
+# bot.py
+# Advanced Tally Style Telegram Bot
+# pip install python-telegram-bot==21.6
 
 import sqlite3
 from datetime import datetime
@@ -14,9 +13,8 @@ from telegram import (
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
-    CallbackQueryHandler,
     MessageHandler,
-    ConversationHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
@@ -24,34 +22,48 @@ from telegram.ext import (
 TOKEN = "8779700912:AAGJqIRuoLlxXGqSZVFum9PE9fSm4_nbYjk"
 
 # ---------------- DATABASE ----------------
-conn = sqlite3.connect("hisab.db", check_same_thread=False)
+conn = sqlite3.connect("tally.db", check_same_thread=False)
 cur = conn.cursor()
 
 cur.execute("""
-CREATE TABLE IF NOT EXISTS deals (
+CREATE TABLE IF NOT EXISTS kits(
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 provider TEXT,
 brand TEXT,
 holder TEXT,
-sell INTEGER,
 cost INTEGER,
-profit INTEGER,
+status TEXT,
 date TEXT
 )
 """)
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS sales(
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+kit_id INTEGER,
+sell_price INTEGER,
+received INTEGER,
+pending INTEGER,
+date TEXT
+)
+""")
+
+cur.execute("""
+CREATE TABLE IF NOT EXISTS provider_payments(
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+provider TEXT,
+amount INTEGER,
+date TEXT
+)
+""")
+
 conn.commit()
 
-# ---------------- STATES ----------------
-CHOOSING_PROVIDER = 1
-CHOOSING_BRAND = 2
-ASK_HOLDER = 3
-ASK_SELL = 4
-
-# ---------------- DATA ----------------
-PROVIDERS = {
+# ---------------- CONFIG ----------------
+COSTS = {
     "KT": 12000,
     "LT": 17000,
-    "AK": "half"
+    "AK": 0
 }
 
 BRANDS = ["BOM", "RBL", "CBI", "BB"]
@@ -59,193 +71,309 @@ BRANDS = ["BOM", "RBL", "CBI", "BB"]
 # ---------------- MENU ----------------
 def menu():
     keyboard = [
-        ["➕ Add Kit", "📊 Reports"]
+        ["📦 Add Kit", "💰 Sell to KK"],
+        ["📥 KK Payment", "📋 Unsold Stock"],
+        ["👤 Providers", "🧾 KK Pending"],
+        ["📊 Reports", "💸 Pay Provider"],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # ---------------- START ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🔥 Bot Ready",
+        "🔥 Advanced Tally Bot Ready",
         reply_markup=menu()
     )
 
-# ---------------- ADD KIT FLOW ----------------
+# ---------------- ADD KIT ----------------
 async def add_kit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     buttons = [
-        [InlineKeyboardButton(x, callback_data=x)]
-        for x in PROVIDERS.keys()
+        [InlineKeyboardButton("KT", callback_data="provider_KT")],
+        [InlineKeyboardButton("LT", callback_data="provider_LT")],
+        [InlineKeyboardButton("AK", callback_data="provider_AK")],
     ]
 
     await update.message.reply_text(
         "Select Provider:",
         reply_markup=InlineKeyboardMarkup(buttons)
     )
-    return CHOOSING_PROVIDER
 
-# ---------------- PROVIDER ----------------
-async def provider_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# ---------------- CALLBACKS ----------------
+async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
+    data = query.data
     await query.answer()
 
-    context.user_data["provider"] = query.data
+    # Provider selected
+    if data.startswith("provider_"):
+        provider = data.replace("provider_", "")
+        context.user_data["provider"] = provider
 
-    buttons = [
-        [InlineKeyboardButton(x, callback_data=x)]
-        for x in BRANDS
-    ]
+        buttons = []
+        for b in BRANDS:
+            buttons.append(
+                [InlineKeyboardButton(b, callback_data=f"brand_{b}")]
+            )
 
-    await query.message.reply_text(
-        "Select Brand:",
-        reply_markup=InlineKeyboardMarkup(buttons)
-    )
-    return CHOOSING_BRAND
-
-# ---------------- BRAND ----------------
-async def brand_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    context.user_data["brand"] = query.data
-
-    await query.message.reply_text(
-        "Enter Holder Name:"
-    )
-
-    return ASK_HOLDER
-
-# ---------------- HOLDER ----------------
-async def holder_received(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data["holder"] = update.message.text.upper()
-
-    buttons = [
-        [InlineKeyboardButton("₹25000", callback_data="25000")],
-        [InlineKeyboardButton("Custom Amount", callback_data="custom")]
-    ]
-
-    await update.message.reply_text(
-        "Select Sell Amount:",
-        reply_markup=InlineKeyboardMarkup(buttons)
-    )
-
-    return ASK_SELL
-
-# ---------------- SELL BUTTON ----------------
-async def sell_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == "custom":
         await query.message.reply_text(
-            "Enter Sell Amount:"
+            "Select Brand:",
+            reply_markup=InlineKeyboardMarkup(buttons)
         )
-        return ASK_SELL
 
-    sell = int(query.data)
-    await save_deal(query.message, context, sell)
+    # Brand selected
+    elif data.startswith("brand_"):
+        brand = data.replace("brand_", "")
+        context.user_data["brand"] = brand
+        context.user_data["mode"] = "holder"
 
-    return ConversationHandler.END
+        await query.message.reply_text("Enter Holder Name:")
 
-# ---------------- CUSTOM SELL ----------------
-async def custom_sell(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text.isdigit():
-        sell = int(update.message.text)
-        await save_deal(update.message, context, sell)
-        return ConversationHandler.END
+    # Sell kit select
+    elif data.startswith("sell_"):
+        kit_id = int(data.replace("sell_", ""))
+        context.user_data["sell_kit"] = kit_id
 
-    return ASK_SELL
+        buttons = [
+            [InlineKeyboardButton("₹25000", callback_data="price_25000")]
+        ]
 
-# ---------------- SAVE ----------------
-async def save_deal(message, context, sell):
-    provider = context.user_data["provider"]
-    brand = context.user_data["brand"]
-    holder = context.user_data["holder"]
+        await query.message.reply_text(
+            "Sell Price:",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
 
-    rule = PROVIDERS[provider]
+    # Price select
+    elif data.startswith("price_"):
+        price = int(data.replace("price_", ""))
+        context.user_data["sell_price"] = price
 
-    if rule == "half":
-        cost = sell // 2
-    else:
-        cost = rule
+        buttons = [
+            [InlineKeyboardButton("₹0", callback_data="recv_0")],
+            [InlineKeyboardButton("₹5000", callback_data="recv_5000")],
+            [InlineKeyboardButton("Full", callback_data=f"recv_{price}")]
+        ]
 
-    profit = sell - cost
-    date = datetime.now().strftime("%d/%m/%Y")
+        await query.message.reply_text(
+            "Received Now?",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
 
-    cur.execute("""
-    INSERT INTO deals
-    (provider, brand, holder, sell, cost, profit, date)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (
-        provider,
-        brand,
-        holder,
-        sell,
-        cost,
-        profit,
-        date
-    ))
-    conn.commit()
+    # Received select
+    elif data.startswith("recv_"):
+        recv = int(data.replace("recv_", ""))
 
-    await message.reply_text(
-        f"✅ Saved Successfully\n\n"
-        f"Provider: {provider}\n"
-        f"Brand: {brand}\n"
-        f"Holder: {holder}\n"
-        f"Sell: ₹{sell}\n"
-        f"Profit: ₹{profit}",
-        reply_markup=menu()
-    )
+        kit_id = context.user_data["sell_kit"]
+        sell_price = context.user_data["sell_price"]
 
-# ---------------- REPORT ----------------
-async def reports(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    cur.execute("SELECT COUNT(*), SUM(profit) FROM deals")
-    row = cur.fetchone()
+        pending = sell_price - recv
+        date = datetime.now().strftime("%d/%m/%Y")
 
-    total = row[0]
-    profit = row[1] if row[1] else 0
+        cur.execute("""
+        INSERT INTO sales
+        (kit_id, sell_price, received, pending, date)
+        VALUES (?, ?, ?, ?, ?)
+        """, (
+            kit_id,
+            sell_price,
+            recv,
+            pending,
+            date
+        ))
 
-    await update.message.reply_text(
-        f"📊 Total Deals: {total}\n"
-        f"💰 Profit: ₹{profit}"
-    )
+        cur.execute("""
+        UPDATE kits
+        SET status='SOLD'
+        WHERE id=?
+        """, (kit_id,))
 
-# ---------------- BUTTONS ----------------
-async def main_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        conn.commit()
+
+        await query.message.reply_text(
+            f"✅ Sold to KK\n"
+            f"Sell: ₹{sell_price}\n"
+            f"Received: ₹{recv}\n"
+            f"Pending: ₹{pending}",
+            reply_markup=menu()
+        )
+
+# ---------------- TEXT INPUT ----------------
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     txt = update.message.text
 
+    # Add Kit
+    if txt == "📦 Add Kit":
+        await add_kit(update, context)
+        return
+
+    # Holder input
+    if context.user_data.get("mode") == "holder":
+        holder = txt.upper()
+
+        provider = context.user_data["provider"]
+        brand = context.user_data["brand"]
+
+        cost = COSTS[provider]
+        date = datetime.now().strftime("%d/%m/%Y")
+
+        cur.execute("""
+        INSERT INTO kits
+        (provider, brand, holder, cost, status, date)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            provider,
+            brand,
+            holder,
+            cost,
+            "STOCK",
+            date
+        ))
+
+        conn.commit()
+
+        context.user_data["mode"] = ""
+
+        await update.message.reply_text(
+            f"✅ Kit Added\n"
+            f"Provider: {provider}\n"
+            f"Brand: {brand}\n"
+            f"Holder: {holder}\n"
+            f"Cost: ₹{cost}",
+            reply_markup=menu()
+        )
+        return
+
+    # Sell to KK
+    if txt == "💰 Sell to KK":
+        cur.execute("""
+        SELECT id, provider, brand, holder
+        FROM kits
+        WHERE status='STOCK'
+        """)
+
+        rows = cur.fetchall()
+
+        if not rows:
+            await update.message.reply_text("No Stock")
+            return
+
+        buttons = []
+
+        for r in rows:
+            text = f"{r[0]} {r[1]} {r[2]} {r[3]}"
+            buttons.append(
+                [InlineKeyboardButton(text, callback_data=f"sell_{r[0]}")]
+            )
+
+        await update.message.reply_text(
+            "Select Kit:",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+        return
+
+    # KK Pending
+    if txt == "🧾 KK Pending":
+        cur.execute("""
+        SELECT id, pending, date
+        FROM sales
+        WHERE pending > 0
+        """)
+
+        rows = cur.fetchall()
+
+        if not rows:
+            await update.message.reply_text("No Pending")
+            return
+
+        msg = "🧾 KK Pending\n\n"
+
+        for r in rows:
+            msg += f"ID {r[0]} | ₹{r[1]} | {r[2]}\n"
+
+        await update.message.reply_text(msg)
+        return
+
+    # Unsold Stock
+    if txt == "📋 Unsold Stock":
+        cur.execute("""
+        SELECT id, provider, brand, holder
+        FROM kits
+        WHERE status='STOCK'
+        """)
+
+        rows = cur.fetchall()
+
+        if not rows:
+            await update.message.reply_text("No Stock")
+            return
+
+        msg = "📋 Stock\n\n"
+
+        for r in rows:
+            msg += f"{r[0]} | {r[1]} | {r[2]} | {r[3]}\n"
+
+        await update.message.reply_text(msg)
+        return
+
+    # Providers
+    if txt == "👤 Providers":
+        for p in ["KT", "LT", "AK"]:
+            cur.execute("""
+            SELECT COUNT(*), SUM(cost)
+            FROM kits
+            WHERE provider=?
+            """, (p,))
+            row = cur.fetchone()
+
+            total = row[0]
+            amount = row[1] if row[1] else 0
+
+            cur.execute("""
+            SELECT SUM(amount)
+            FROM provider_payments
+            WHERE provider=?
+            """, (p,))
+            paid = cur.fetchone()[0]
+            paid = paid if paid else 0
+
+            pending = amount - paid
+
+            await update.message.reply_text(
+                f"{p}\nDeals: {total}\nPayable: ₹{amount}\nPaid: ₹{paid}\nPending: ₹{pending}"
+            )
+        return
+
+    # Reports
     if txt == "📊 Reports":
-        await reports(update, context)
+        cur.execute("SELECT COUNT(*) FROM sales")
+        deals = cur.fetchone()[0]
+
+        cur.execute("SELECT SUM(sell_price) FROM sales")
+        sale = cur.fetchone()[0]
+        sale = sale if sale else 0
+
+        cur.execute("SELECT SUM(cost) FROM kits WHERE status='SOLD'")
+        cost = cur.fetchone()[0]
+        cost = cost if cost else 0
+
+        profit = sale - cost
+
+        await update.message.reply_text(
+            f"📊 Reports\n\n"
+            f"Sold Deals: {deals}\n"
+            f"Sales: ₹{sale}\n"
+            f"Cost: ₹{cost}\n"
+            f"Profit: ₹{profit}"
+        )
+        return
 
 # ---------------- APP ----------------
 app = ApplicationBuilder().token(TOKEN).build()
 
-conv = ConversationHandler(
-    entry_points=[
-        MessageHandler(filters.Regex("^➕ Add Kit$"), add_kit)
-    ],
-    states={
-        CHOOSING_PROVIDER: [
-            CallbackQueryHandler(provider_selected)
-        ],
-        CHOOSING_BRAND: [
-            CallbackQueryHandler(brand_selected)
-        ],
-        ASK_HOLDER: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, holder_received)
-        ],
-        ASK_SELL: [
-            CallbackQueryHandler(sell_selected),
-            MessageHandler(filters.TEXT & ~filters.COMMAND, custom_sell)
-        ],
-    },
-    fallbacks=[],
-)
-
 app.add_handler(CommandHandler("start", start))
-app.add_handler(conv)
+app.add_handler(CallbackQueryHandler(callbacks))
 app.add_handler(
-    MessageHandler(filters.TEXT & ~filters.COMMAND, main_buttons)
+    MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler)
 )
 
-print("Running...")
+print("Bot Running...")
 app.run_polling()
