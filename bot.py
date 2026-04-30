@@ -3,7 +3,7 @@ from datetime import datetime
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-TOKEN = "YOUR_BOT_TOKEN_HERE"
+TOKEN = "8779700912:AAGJqIRuoLlxXGqSZVFum9PE9fSm4_nbYjk"
 
 conn = sqlite3.connect("hisab.db", check_same_thread=False)
 cur = conn.cursor()
