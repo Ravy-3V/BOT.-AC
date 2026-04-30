@@ -20,7 +20,7 @@ from telegram.ext import (
 )
 
 TOKEN = "8779700912:AAGJqIRuoLlxXGqSZVFum9PE9fSm4_nbYjk"
-
+ADMIN_ID = 8748005457
 # ==================================================
 # DATABASE
 # ==================================================
@@ -85,6 +85,8 @@ BRANDS = ["BOM", "RBL", "CBI", "BB"]
 
 # ==================================================
 # MENU
+def allowed(update):
+    return update.effective_user.id == ADMIN_ID
 # ==================================================
 def menu():
     keyboard = [
@@ -112,12 +114,15 @@ def add_ledger(party, typ, amount, note):
 # ==================================================
 # START
 # ==================================================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update, context):
+    if not allowed(update):
+        await update.message.reply_text("⛔ Access Denied")
+        return
+
     await update.message.reply_text(
         "🔥 Premium Tally Bot Ready",
         reply_markup=menu()
-    )
-
+    ) 
 # ==================================================
 # ADD KIT
 # ==================================================
@@ -136,11 +141,11 @@ async def add_kit(update, context):
 # ==================================================
 # CALLBACKS
 # ==================================================
-async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+async def callbacks(update, context):
+    if not allowed(update):
+        return
 
-    data = query.data
+    query = update.callback_query
 
     # Provider Select
     if data.startswith("provider_"):
@@ -237,7 +242,8 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ==================================================
 # TEXT HANDLER
 # ==================================================
-async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def text_handler(update: if not allowed(update):
+    return):
     txt = update.message.text.strip()
 
     # --------------------------------------
